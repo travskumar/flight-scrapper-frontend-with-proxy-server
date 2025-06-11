@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TC - Flight Scrapper, Analytics</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <div class="search-card">
+            <h1>TC - Flight Scrapper</h1>
+
+            <div class="error-message" id="errorMessage"></div>
+
+            <form id="searchForm">
+                <div class="portal-tabs">
+                    <button type="button" class="portal-tab active" data-portal="travclan">Travclan</button>
+                    <button type="button" class="portal-tab" data-portal="tripjack">Tripjack</button>
+                    <button type="button" class="portal-tab" data-portal="tbo">TBO</button>
+                </div>
+
+                <div class="portal-content active" id="travclan-content">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="travclanToken">Travclan Bearer Token</label>
+                            <textarea id="travclanToken" placeholder="Bearer eyJraWQ..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="portal-content" id="tripjack-content">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="tripjackToken">Tripjack Bearer Token</label>
+                            <textarea id="tripjackToken" placeholder="Bearer eyJsb25ndGVybSI..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="portal-content" id="tbo-content">
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="tboCookies">TBO Session Cookies (Full Cookie String)</label>
+                            <textarea id="tboCookies" placeholder="Paste your complete TBO session cookies here..."></textarea>
+                        </div>
+                    </div>
+                    <div class="info-section">
+                        <strong>⚠️ TBO Note:</strong> You need to be logged into TBO to get session cookies. Copy all cookies from the browser's developer tools (Network tab → Headers → Cookie).
+                    </div>
+                </div>
+
+                <div class="shared-fields">
+                    <h3 style="margin-bottom: 20px; color: #333;">Flight Search Details</h3>
+                    
+                    <div class="portal-selector">
+                        <label style="font-weight: 600;">Select Portals to Search:</label>
+                        <div class="portal-checkbox">
+                            <input type="checkbox" id="searchTravclan" checked>
+                            <label for="searchTravclan">Travclan</label>
+                        </div>
+                        <div class="portal-checkbox">
+                            <input type="checkbox" id="searchTripjack" checked>
+                            <label for="searchTripjack">Tripjack</label>
+                        </div>
+                        <div class="portal-checkbox">
+                            <input type="checkbox" id="searchTBO" checked>
+                            <label for="searchTBO">TBO</label>
+                        </div>
+                    </div>
+
+                    <div class="form-grid">
+                        <div class="form-group">
+                            <label for="source">Source Airport Code</label>
+                            <input type="text" id="source" placeholder="DEL" maxlength="3" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="destination">Destination Airport Code</label>
+                            <input type="text" id="destination" placeholder="BOM" maxlength="3" required>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="departureDate">Departure Date</label>
+                            <input type="date" id="departureDate" required>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="primary-btn">
+                        <span>🔍</span> Search Flights
+                    </button>
+                    <button type="button" id="exportTravclanBtn" class="secondary-btn travclan" disabled>
+                        <span>📥</span> Export Travclan CSV
+                    </button>
+                    <button type="button" id="exportTripjackBtn" class="secondary-btn tripjack" disabled>
+                        <span>📥</span> Export Tripjack CSV
+                    </button>
+                    <button type="button" id="exportTBOBtn" class="secondary-btn tbo" disabled>
+                        <span>📥</span> Export TBO CSV
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p id="loadingText">Searching for flights...</p>
+        </div>
+
+        <div class="results-section" id="resultsSection">
+            <div class="search-card">
+                <h2 style="margin-bottom: 20px;">📊 Search Results</h2>
+                
+                <div class="stats-grid" id="statsGrid"></div>
+                
+                <div class="flight-grid" id="flightGrid"></div>
+            </div>
+        </div>
+    </div>
+
+    <script src="./script.js"></script>
+</body>
+</html>

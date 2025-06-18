@@ -287,7 +287,7 @@ async function searchTBOFlights(source, destination, departureDate) {
     }
 }
 
-// Parse TBO flight data from HTML
+// Parse TBO flight data from HTML - Updated to handle multiple suppliers/fare types
 async function parseTBOFlightData(htmlContent) {
     console.log('  📊 Parsing TBO flight data...');
     
@@ -295,27 +295,11 @@ async function parseTBOFlightData(htmlContent) {
     const tempDiv = document.createElement('div');
     tempDiv.innerHTML = htmlContent;
     
-    // Use the exact selector that works - without .selected
-    const flightCards = tempDiv.querySelectorAll('.flightresult_grid.result_p.mb-1.refResultRow');
-    console.log(`  📊 Found ${flightCards.length} flight cards using TBO specific selector`);
+    // Use the selector for all flight cards
+    const flightCards = tempDiv.querySelectorAll('.refResultRow');
+    console.log(`  📊 Found ${flightCards.length} flight cards using TBO selector`);
 
     if (flightCards.length === 0) {
-        // Try alternative selectors if the specific one doesn't work
-        const alternativeSelectors = [
-            '.result_p',
-            '.flightresult_grid',
-            '.refResultRow',
-            '[class*="flightresult"]'
-        ];
-        
-        for (const selector of alternativeSelectors) {
-            const cards = tempDiv.querySelectorAll(selector);
-            if (cards.length > 0) {
-                console.log(`  📊 Found ${cards.length} flight cards using fallback selector: ${selector}`);
-                return parseTBOFlightCardsAlternative(cards);
-            }
-        }
-        
         // Check for error indicators
         if (htmlContent.includes('login') || htmlContent.includes('Login')) {
             throw new Error('Received login page - TBO session cookies may be expired');
@@ -331,78 +315,156 @@ async function parseTBOFlightData(htmlContent) {
 
     const processedFlights = [];
     
-    flightCards.forEach((flight, index) => {
+    // Extended airline name mapping
+    const airlineNameMap = {
+        '6E': 'Indigo',
+        'SG': 'SpiceJet', 
+        'IX': 'Air India Express',
+        'AI': 'Air India',
+        'UK': 'Vistara',
+        'G8': 'GoAir',
+        'I5': 'AirAsia India',
+        '9W': 'Jet Airways',
+        'QP': 'Akasa Air',
+        'TG': 'Thai Airways International',
+        'OD': 'Malindo Air',
+        'VN': 'Vietnam Airlines',
+        'MH': 'Malaysia Airlines',
+        'VJ': 'VietJet Air',
+        'SQ': 'Singapore Airlines',
+        'CX': 'Cathay Pacific',
+        'EY': 'Etihad Airways',
+        'QR': 'Qatar Airways',
+        'EK': 'Emirates Airlines',
+        'GA': 'Garuda Indonesia'
+    };
+    
+    flightCards.forEach((flightCard, flightIndex) => {
         try {
-            // Extract data using exact selectors from your working code
-            const airlineCode = flight.querySelector('kbd[id^="airlineCode_"]')?.textContent?.trim() || '';
-            const flightNumber = flight.querySelector('input[id^="allSegmentFltNo_"]')?.value || '';
-            const flightFullNumber = airlineCode && flightNumber ? `${airlineCode}-${flightNumber}` : 'Unknown';
+            // Extract base flight information
+            const airlineCode = flightCard.querySelector('.airlinecode code')?.textContent?.trim() || 
+                              flightCard.querySelector('kbd[id^="airlineCode_"]')?.textContent?.trim() || '';
             
-            const airlineName = flight.querySelector('.fn_rht h4')?.textContent?.trim() || 
-                              flight.querySelector('.airline-name')?.textContent?.trim() || 
-                              'Unknown';
+            // Get all flight numbers
+            const flightNumbers = Array.from(flightCard.querySelectorAll('.airlinecode small'))
+                .map(el => el.textContent.trim())
+                .filter(num => num)
+                .join(', ');
             
-            const origin = flight.querySelector('span[id^="OriginAirportCode_"]')?.textContent?.trim() || '';
-            const destination = flight.querySelector('span[id^="DestinationAirportCode_"]')?.textContent?.trim() || '';
+            // Alternative flight number extraction
+            const altFlightNumber = flightCard.querySelector('input[id^="allSegmentFltNo_"]')?.value || '';
+            const finalFlightNumbers = flightNumbers || altFlightNumber || '';
             
-            const departureTime = flight.querySelector('.fdepbx tt')?.textContent?.trim() || '';
-            const arrivalTime = flight.querySelector('.farrbx tt')?.textContent?.trim() || '';
-            const duration = flight.querySelector('tt[id^="duration_"]')?.textContent?.trim() || '';
+            // Get airline name from mapping or use code
+            const airlineName = airlineNameMap[airlineCode] || 
+                              flightCard.querySelector('.fn_rht h4')?.textContent?.trim() || 
+                              airlineCode || 'Unknown';
             
-            // Check for stops - TBO might show this differently
-            const stopsElement = flight.querySelector('span[id^="outBoundStops_"]') || 
-                               flight.querySelector('[id*="stops"]') ||
-                               flight.querySelector('.stops');
-            const stopsText = stopsElement ? stopsElement.textContent.trim() : '';
-            const isDirect = !stopsText || stopsText === '0' || stopsText.toLowerCase().includes('non') ? 'Direct' : 'Indirect';
+            // Extract route information
+            const origin = flightCard.querySelector('[id^="OriginAirportCode_"]')?.textContent?.trim() || 
+                         flightCard.querySelector('span[id^="OriginAirportCode_"]')?.textContent?.trim() || '';
             
-            // Fare information
-            const fareSummary = flight.querySelector('input[id^="FareSummaryValue_"]')?.value || '';
-            const baseFare = fareSummary ? parseFloat(fareSummary.split('|')[0]) || 0 : 0;
+            const destination = flightCard.querySelector('[id^="DestinationAirportCode_"]')?.textContent?.trim() || 
+                              flightCard.querySelector('span[id^="DestinationAirportCode_"]')?.textContent?.trim() || '';
             
-            const finalFareText = flight.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim() || '';
-            const finalFare = finalFareText ? parseFloat(finalFareText.replace(/[₹,]/g, '')) || 0 : 0;
+            // Times
+            const departureTime = flightCard.querySelector('.fdepbx tt')?.textContent?.trim() || '';
+            const arrivalTime = flightCard.querySelector('.farrbx tt')?.textContent?.trim() || '';
+            const duration = flightCard.querySelector('[id^="duration_"]')?.textContent?.trim() || 
+                           flightCard.querySelector('tt[id^="duration_"]')?.textContent?.trim() || '';
             
-            const fareType = flight.querySelector('span[id^="faretype_"]')?.textContent?.trim() || 'Published';
+            // Stops information
+            const stopsElement = flightCard.querySelector('[id^="outBoundStops_"] small') || 
+                               flightCard.querySelector('[id^="outBoundStops_"]');
+            const stopsText = stopsElement?.textContent?.trim()?.toLowerCase() || 'non-stop';
+            const directOrIndirect = stopsText.includes('non-stop') || stopsText === '0' ? 'Direct' : 'Indirect';
             
-            // Baggage info - note the IDs might be dynamic
-            const baggage = flight.querySelector('td[id^="checkInBaggage_"]')?.textContent?.trim() || 
-                          'Not specified';
+            // Cabin class
+            const cabinClass = flightCard.querySelector('p[id^="pCabinClass_"]')?.textContent?.trim() || 'Economy';
             
-            const cabinBaggage = flight.querySelector('td[id^="cabinBaggage_"]')?.textContent?.trim() || 
-                               'Included';
-
-            const flightData = {
-                portal: 'TBO',
-                flightNumber: flightFullNumber,
-                airline: airlineName,
-                origin: origin,
-                destination: destination,
-                departureTime: departureTime,
-                arrivalTime: arrivalTime,
-                duration: duration,
-                stops: stopsText || '0',
-                directIndirect: isDirect,
-                baseFare: baseFare,
-                finalFare: finalFare,
-                netTDS: 0,
-                fareType: fareType,
-                provider: 'TBO',
-                baggage: baggage,
-                cabinBaggage: cabinBaggage
-            };
-
-            // Only add if we have valid data
-            if (flightFullNumber !== 'Unknown' && origin && destination && finalFare > 0) {
-                processedFlights.push(flightData);
-                console.log(`  ✈️ Processed TBO flight ${index + 1}: ${airlineName} ${flightFullNumber} - ₹${finalFare}`);
+            // IMPORTANT: Now process EACH price box (multiple suppliers/fare types per flight)
+            const priceBoxes = flightCard.querySelectorAll('.flpricebx');
+            
+            if (priceBoxes.length === 0) {
+                // Fallback to single price extraction
+                const publishFare = flightCard.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
+                const offerFare = flightCard.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
+                const fareType = flightCard.querySelector('span[id^="faretype_"]')?.textContent?.trim() || 'Published';
+                
+                if (parseFloat(offerFare) > 0) {
+                    const formattedFlightNumber = `${airlineCode}-${finalFlightNumbers}`;
+                    
+                    processedFlights.push({
+                        portal: 'TBO',
+                        flightNumber: formattedFlightNumber,
+                        airline: airlineName,
+                        origin: origin,
+                        destination: destination,
+                        departureTime: departureTime,
+                        arrivalTime: arrivalTime,
+                        duration: duration,
+                        stops: stopsText,
+                        directIndirect: directOrIndirect,
+                        baseFare: parseFloat(publishFare) || 0,
+                        finalFare: parseFloat(offerFare) || 0,
+                        netTDS: 0,
+                        fareType: fareType,
+                        provider: 'TBO',
+                        baggage: '15 Kg',
+                        cabinBaggage: '7 Kg',
+                        cabinClass: cabinClass
+                    });
+                }
+            } else {
+                // Process each price box (different suppliers/fare types)
+                priceBoxes.forEach((priceBox, priceIndex) => {
+                    const publishFare = priceBox.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
+                    const offerFare = priceBox.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
+                    const fareType = priceBox.querySelector('span[id^="faretype_"]')?.textContent?.trim() || '';
+                    
+                    // Skip empty price boxes
+                    if (!publishFare && !offerFare && !fareType) return;
+                    
+                    // Format flight number with supplier info
+                    const formattedFlightNumber = `${airlineCode}-${finalFlightNumbers}`;
+                    
+                    // Extract baggage info if available in price box
+                    const baggage = priceBox.querySelector('td[id^="checkInBaggage_"]')?.textContent?.trim() || '15 Kg';
+                    const cabinBaggage = priceBox.querySelector('td[id^="cabinBaggage_"]')?.textContent?.trim() || '7 Kg';
+                    
+                    const flightData = {
+                        portal: 'TBO',
+                        flightNumber: formattedFlightNumber,
+                        airline: airlineName,
+                        origin: origin,
+                        destination: destination,
+                        departureTime: departureTime,
+                        arrivalTime: arrivalTime,
+                        duration: duration,
+                        stops: stopsText,
+                        directIndirect: directOrIndirect,
+                        baseFare: parseFloat(publishFare) || 0,
+                        finalFare: parseFloat(offerFare) || 0,
+                        netTDS: 0,
+                        fareType: fareType || 'Published',
+                        provider: `TBO-${fareType || 'Default'}`, // Include fare type in provider
+                        baggage: baggage,
+                        cabinBaggage: cabinBaggage,
+                        cabinClass: cabinClass
+                    };
+                    
+                    if (parseFloat(offerFare) > 0 && origin && destination) {
+                        processedFlights.push(flightData);
+                        console.log(`  ✈️ Processed TBO flight ${flightIndex + 1}.${priceIndex + 1}: ${airlineName} ${formattedFlightNumber} - ${fareType} - ₹${offerFare}`);
+                    }
+                });
             }
         } catch (error) {
-            console.error(`  ❌ Error processing TBO flight card ${index + 1}: ${error.message}`);
+            console.error(`  ❌ Error processing TBO flight card ${flightIndex + 1}: ${error.message}`);
         }
     });
 
-    console.log(`  📊 Successfully parsed ${processedFlights.length} TBO flights`);
+    console.log(`  📊 Successfully parsed ${processedFlights.length} TBO flight options (including multiple fare types)`);
     return processedFlights;
 }
 
@@ -1150,12 +1212,12 @@ function exportToCSV(portal) {
             ].join(','))
         ].join('\n');
     } else {
-        // TBO CSV format
+        // TBO CSV format - Updated to handle multiple suppliers
         headers = [
             'Portal', 'Flight Number', 'Airline', 'Origin', 'Destination',
             'Departure Time', 'Arrival Time', 'Duration', 'Direct/Indirect',
             'Base Fare', 'Final Fare', 'Fare Type', 'Provider',
-            'Baggage', 'Cabin Baggage'
+            'Baggage', 'Cabin Baggage', 'Cabin Class'
         ];
 
         csvContent = [
@@ -1175,7 +1237,8 @@ function exportToCSV(portal) {
                 `"${flight.fareType}"`,
                 `"${flight.provider}"`,
                 `"${flight.baggage}"`,
-                `"${flight.cabinBaggage}"`
+                `"${flight.cabinBaggage}"`,
+                `"${flight.cabinClass || 'Economy'}"`
             ].join(','))
         ].join('\n');
     }

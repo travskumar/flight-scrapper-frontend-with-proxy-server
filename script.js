@@ -1,12 +1,7 @@
-// flight-search.js
-
-// Global variables
-let travclanFlightData = [];
-let tripjackFlightData = [];
-let tboFlightData = [];
+let searchResults = {};
 let currentPortal = 'travclan';
+let routeCounter = 1;
 
-// Airport name mappings for TBO
 const airportNames = {
     'DEL': 'Indira Gandhi Airport (DEL), Delhi, India',
     'BOM': 'Chhatrapati Shivaji International Airport (BOM), Mumbai, India',
@@ -35,26 +30,34 @@ const airportNames = {
     'CMB': 'Bandaranaike International Airport (CMB), Colombo, Sri Lanka'
 };
 
-// DOM elements
-const form = document.getElementById('searchForm');
-const errorMessage = document.getElementById('errorMessage');
-const loading = document.getElementById('loading');
-const loadingText = document.getElementById('loadingText');
-const resultsSection = document.getElementById('resultsSection');
-const exportTravclanBtn = document.getElementById('exportTravclanBtn');
-const exportTripjackBtn = document.getElementById('exportTripjackBtn');
-const exportTBOBtn = document.getElementById('exportTBOBtn');
-const statsGrid = document.getElementById('statsGrid');
-const flightGrid = document.getElementById('flightGrid');
+const airlineNameMap = {
+    '6E': 'Indigo',
+    'SG': 'SpiceJet', 
+    'IX': 'Air India Express',
+    'AI': 'Air India',
+    'UK': 'Vistara',
+    'G8': 'GoAir',
+    'I5': 'AirAsia India',
+    '9W': 'Jet Airways',
+    'QP': 'Akasa Air',
+    'TG': 'Thai Airways International',
+    'OD': 'Malindo Air',
+    'VN': 'Vietnam Airlines',
+    'MH': 'Malaysia Airlines',
+    'VJ': 'VietJet Air',
+    'SQ': 'Singapore Airlines',
+    'CX': 'Cathay Pacific',
+    'EY': 'Etihad Airways',
+    'QR': 'Qatar Airways',
+    'EK': 'Emirates Airlines',
+    'GA': 'Garuda Indonesia'
+};
 
-// Initialize
 document.addEventListener('DOMContentLoaded', () => {
-    // Set default date to tomorrow
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    document.getElementById('departureDate').value = tomorrow.toISOString().split('T')[0];
+    document.querySelector('.departure-date-input').value = tomorrow.toISOString().split('T')[0];
 
-    // Portal tabs
     const portalTabs = document.querySelectorAll('.portal-tab');
     portalTabs.forEach(tab => {
         tab.addEventListener('click', () => {
@@ -69,115 +72,613 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Form submission
-    form.addEventListener('submit', async (e) => {
+    document.getElementById('searchForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        await searchFlights();
+        await searchAllRoutes();
     });
 
-    // Export buttons
-    exportTravclanBtn.addEventListener('click', () => exportToCSV('travclan'));
-    exportTripjackBtn.addEventListener('click', () => exportToCSV('tripjack'));
-    exportTBOBtn.addEventListener('click', () => exportToCSV('tbo'));
+    document.getElementById('addRouteBtn').addEventListener('click', addRoute);
+    document.getElementById('exportTravclanBtn').addEventListener('click', () => exportPortalResults('travclan'));
+    document.getElementById('exportTripjackBtn').addEventListener('click', () => exportPortalResults('tripjack'));
+    document.getElementById('exportTBOBtn').addEventListener('click', () => exportPortalResults('tbo'));
 });
 
-// Main search function
-async function searchFlights() {
-    const source = document.getElementById('source').value.toUpperCase();
-    const destination = document.getElementById('destination').value.toUpperCase();
-    const departureDate = document.getElementById('departureDate').value;
+function addRoute() {
+    const routesContainer = document.getElementById('routesContainer');
+    const newRouteIndex = routeCounter++;
+    
+    const routeDiv = document.createElement('div');
+    routeDiv.className = 'route-item';
+    routeDiv.dataset.routeIndex = newRouteIndex;
+    
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    routeDiv.innerHTML = `
+        <div class="route-header">
+            <h4>Route ${newRouteIndex + 1}</h4>
+            <button type="button" class="remove-route-btn">✕ Remove</button>
+        </div>
+        <div class="form-grid">
+            <div class="form-group">
+                <label>Source Airport Code</label>
+                <input type="text" class="source-input" placeholder="DEL" maxlength="3" required>
+            </div>
+            <div class="form-group">
+                <label>Destination Airport Code</label>
+                <input type="text" class="destination-input" placeholder="BOM" maxlength="3" required>
+            </div>
+            <div class="form-group">
+                <label>Departure Date</label>
+                <input type="date" class="departure-date-input" value="${tomorrow.toISOString().split('T')[0]}" required>
+            </div>
+        </div>
+    `;
+    
+    routesContainer.appendChild(routeDiv);
+    
+    routeDiv.querySelector('.remove-route-btn').addEventListener('click', () => {
+        routeDiv.remove();
+        updateRouteNumbers();
+    });
+    
+    updateRouteNumbers();
+}
+
+function updateRouteNumbers() {
+    const routes = document.querySelectorAll('.route-item');
+    routes.forEach((route, index) => {
+        route.querySelector('h4').textContent = `Route ${index + 1}`;
+        route.querySelector('.remove-route-btn').style.display = routes.length > 1 ? 'block' : 'none';
+    });
+}
+
+async function searchAllRoutes() {
+    const routes = [];
+    const routeElements = document.querySelectorAll('.route-item');
+    
+    routeElements.forEach(routeEl => {
+        const source = routeEl.querySelector('.source-input').value.toUpperCase();
+        const destination = routeEl.querySelector('.destination-input').value.toUpperCase();
+        const departureDate = routeEl.querySelector('.departure-date-input').value;
+        
+        if (source && destination && departureDate) {
+            routes.push({ source, destination, departureDate });
+        }
+    });
+    
+    if (routes.length === 0) {
+        showError('Please add at least one route');
+        return;
+    }
+    
     const searchTravclan = document.getElementById('searchTravclan').checked;
     const searchTripjack = document.getElementById('searchTripjack').checked;
     const searchTBO = document.getElementById('searchTBO').checked;
-
+    
     if (!searchTravclan && !searchTripjack && !searchTBO) {
         showError('Please select at least one portal to search');
         return;
     }
-
-    // Reset UI
-    errorMessage.classList.remove('active');
-    loading.classList.add('active');
-    resultsSection.classList.remove('active');
-    exportTravclanBtn.disabled = true;
-    exportTripjackBtn.disabled = true;
-    exportTBOBtn.disabled = true;
-    travclanFlightData = [];
-    tripjackFlightData = [];
-    tboFlightData = [];
-
-    const searchPromises = [];
-    let searchText = 'Searching flights on: ';
-    const portalsToSearch = [];
-
-    if (searchTravclan) {
-        portalsToSearch.push('Travclan');
-        searchPromises.push(searchTravclanFlights(source, destination, departureDate));
+    
+    document.getElementById('errorMessage').classList.remove('active');
+    document.getElementById('loading').classList.add('active');
+    document.getElementById('resultsContainer').innerHTML = '';
+    document.getElementById('exportTravclanBtn').disabled = true;
+    document.getElementById('exportTripjackBtn').disabled = true;
+    document.getElementById('exportTBOBtn').disabled = true;
+    
+    searchResults = {};
+    
+    const totalSearches = routes.length * 
+        ((searchTravclan ? 1 : 0) + (searchTripjack ? 1 : 0) + (searchTBO ? 1 : 0));
+    let completedSearches = 0;
+    
+    for (const route of routes) {
+        const routeKey = `${route.source}-${route.destination}`;
+        searchResults[routeKey] = {
+            route: route,
+            travclan: [],
+            tripjack: [],
+            tbo: []
+        };
+        
+        const searchPromises = [];
+        
+        if (searchTravclan) {
+            searchPromises.push(
+                searchTravclanFlights(route.source, route.destination, route.departureDate)
+                    .then(result => {
+                        completedSearches++;
+                        updateLoadingText(completedSearches, totalSearches);
+                        if (result.success && result.flights) {
+                            searchResults[routeKey].travclan = result.flights;
+                        }
+                        return result;
+                    })
+            );
+        }
+        
+        if (searchTripjack) {
+            searchPromises.push(
+                searchTripjackFlights(route.source, route.destination, route.departureDate)
+                    .then(result => {
+                        completedSearches++;
+                        updateLoadingText(completedSearches, totalSearches);
+                        if (result.success && result.flights) {
+                            searchResults[routeKey].tripjack = result.flights;
+                        }
+                        return result;
+                    })
+            );
+        }
+        
+        if (searchTBO) {
+            searchPromises.push(
+                searchTBOFlights(route.source, route.destination, route.departureDate)
+                    .then(result => {
+                        completedSearches++;
+                        updateLoadingText(completedSearches, totalSearches);
+                        if (result.success && result.flights) {
+                            searchResults[routeKey].tbo = result.flights;
+                        }
+                        return result;
+                    })
+            );
+        }
+        
+        await Promise.all(searchPromises);
     }
     
-    if (searchTripjack) {
-        portalsToSearch.push('Tripjack');
-        searchPromises.push(searchTripjackFlights(source, destination, departureDate));
-    }
+    document.getElementById('loading').classList.remove('active');
+    displayAllResults();
+    
+    const exportData = {
+        travclan: [],
+        tripjack: [],
+        tbo: []
+    };
+    
+    Object.values(searchResults).forEach(routeData => {
+        exportData.travclan.push(...routeData.travclan);
+        exportData.tripjack.push(...routeData.tripjack);
+        exportData.tbo.push(...routeData.tbo);
+    });
+    
+    document.getElementById('exportTravclanBtn').disabled = exportData.travclan.length === 0;
+    document.getElementById('exportTripjackBtn').disabled = exportData.tripjack.length === 0;
+    document.getElementById('exportTBOBtn').disabled = exportData.tbo.length === 0;
+}
 
-    if (searchTBO) {
-        portalsToSearch.push('TBO');
-        searchPromises.push(searchTBOFlights(source, destination, departureDate));
-    }
+function updateLoadingText(completed, total) {
+    document.getElementById('loadingText').textContent = 
+        `Searching flights... (${completed}/${total} searches completed)`;
+}
 
-    loadingText.textContent = searchText + portalsToSearch.join(', ') + '...';
+function displayAllResults() {
+    const container = document.getElementById('resultsContainer');
+    
+    Object.entries(searchResults).forEach(([routeKey, routeData]) => {
+        const { route, travclan, tripjack, tbo } = routeData;
+        const allFlights = [...travclan, ...tripjack, ...tbo];
+        
+        if (allFlights.length === 0) return;
+        
+        allFlights.sort((a, b) => (a.finalFare || a.farePrice) - (b.finalFare || b.farePrice));
+        
+        const routeSection = document.createElement('div');
+        routeSection.className = 'results-section active';
+        routeSection.innerHTML = `
+            <div class="search-card">
+                <h2 style="margin-bottom: 20px;">✈️ ${route.source} → ${route.destination} (${formatDate(route.departureDate)})</h2>
+                
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value">${allFlights.length}</div>
+                        <div class="stat-label">Total Flights</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${travclan.length}</div>
+                        <div class="stat-label">Travclan</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${tripjack.length}</div>
+                        <div class="stat-label">Tripjack</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">${tbo.length}</div>
+                        <div class="stat-label">TBO</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value">₹${allFlights.length > 0 ? 
+                            Math.min(...allFlights.map(f => f.finalFare || f.farePrice)).toLocaleString() : '0'}</div>
+                        <div class="stat-label">Lowest Fare</div>
+                    </div>
+                </div>
+                
+                <div class="flight-grid">
+                    ${allFlights.slice(0, 20).map(flight => createFlightCard(flight)).join('')}
+                </div>
+                
+                ${allFlights.length > 20 ? `<p style="text-align: center; margin-top: 20px; color: #666;">Showing top 20 of ${allFlights.length} flights</p>` : ''}
+            </div>
+        `;
+        
+        container.appendChild(routeSection);
+    });
+}
+
+function createFlightCard(flight) {
+    return `
+        <div class="flight-card">
+            <div class="flight-header">
+                <div class="airline-info">
+                    <div class="airline-logo">${flight.airline.substring(0, 2).toUpperCase()}</div>
+                    <div>
+                        <div class="flight-number">${flight.flightNumber}</div>
+                        <div class="airline-name">${flight.airline}</div>
+                    </div>
+                </div>
+                <div class="price-info">
+                    <div class="final-fare">₹${(flight.finalFare || flight.farePrice).toLocaleString()}</div>
+                    <div class="fare-type">${flight.fareClass || flight.fareType} - ${flight.portal}</div>
+                </div>
+            </div>
+            
+            <div class="flight-details">
+                <div class="departure">
+                    <div class="city-code">${flight.origin}</div>
+                    <div class="time">${flight.departureTime}</div>
+                </div>
+                <div class="flight-path">
+                    <div class="flight-line"></div>
+                    <div>
+                        <div class="flight-duration">${flight.duration}</div>
+                        <div class="stops ${flight.stops === 0 || flight.directIndirect === 'Direct' ? 'non-stop' : ''}">
+                            ${flight.directIndirect || (flight.stops === 0 ? 'Direct' : `${flight.stops} stop${flight.stops > 1 ? 's' : ''}`)}
+                        </div>
+                    </div>
+                    <div class="flight-line"></div>
+                </div>
+                <div class="arrival">
+                    <div class="city-code">${flight.destination}</div>
+                    <div class="time">${flight.arrivalTime}</div>
+                </div>
+            </div>
+            
+            <div class="flight-footer">
+                <div class="baggage-info">
+                    <span>🎒 Cabin: ${flight.cabinBaggage}</span>
+                    <span>🧳 Check-in: ${flight.baggage}</span>
+                </div>
+                <div class="provider">${flight.provider}</div>
+            </div>
+        </div>
+    `;
+}
+
+function exportPortalResults(portal) {
+    const allFlights = [];
+    const departureDates = new Set();
+    
+    Object.values(searchResults).forEach(routeData => {
+        allFlights.push(...routeData[portal]);
+        routeData.route && departureDates.add(routeData.route.departureDate);
+    });
+    
+    if (allFlights.length === 0) {
+        showError(`No ${portal} data to export!`);
+        return;
+    }
+    
+    const timestamp = new Date().toISOString().split('T')[0];
+    const dateRange = departureDates.size === 1 
+        ? Array.from(departureDates)[0] 
+        : `${timestamp}_multiple_dates`;
+    
+    const csvContent = generateCSV(portal, allFlights);
+    const filename = `${portal}_${dateRange}.csv`;
+    
+    downloadCSV(csvContent, filename);
+    showSuccess(`${portal} CSV exported successfully!`);
+}
+
+function generateCSV(portal, flights) {
+    let headers, rows;
+    
+    if (portal === 'travclan') {
+        headers = ['Portal', 'Flight Number', 'Airline', 'Origin', 'Destination', 'Sector',
+            'Date', 'Departure Time', 'Arrival Time', 'Duration', 'Stops',
+            'Base Fare', 'Final Fare', 'Fare Type Received', 'FareTypeWeShow',
+            'Provider', 'Check-in Baggage', 'Cabin Baggage'];
+        
+        rows = flights.map(f => {
+            // Extract date and times
+            const depDate = f.departureTime ? f.departureTime.split(',')[0] : '';
+            const depTime = f.departureTime ? f.departureTime.split(',')[1]?.trim() || '' : '';
+            const arrTime = f.arrivalTime ? f.arrivalTime.split(',')[1]?.trim() || '' : '';
+            
+            // Map FareTypeReceived to FareTypeWeShow
+            const fareTypeMapping = {
+                'OFFER_FARE_WITH_PNR': 'Series Fare',
+                'Series Fare': 'Series Fare',
+                'Series': 'Others',
+                'COUPON': 'Coupon',
+                'Corp Fare': 'Special Fare',
+                'Corporate': 'Special Fare',
+                'Coupon Fare': 'Coupon',
+                'Coupon': 'Coupon',
+                'Published': 'Published',
+                'PUBLISHED': 'Published',
+                'SME': 'SME',
+                'FLEXI': 'Flexi',
+                'CORPORATE_FARE': 'Special Fare',
+                'TJ_FLEX': 'Flexi'
+            };
+            
+            const fareTypeWeShow = fareTypeMapping[f.fareIdentifier] || 
+                                  fareTypeMapping[f.fareClass] || 
+                                  'Others';
+            
+            return [
+                f.portal,
+                f.flightNumber,
+                f.airline, // No quotes
+                f.origin,
+                f.destination,
+                `${f.origin}-${f.destination}`,
+                depDate,
+                depTime,
+                arrTime,
+                f.duration,
+                f.stops === 0 ? 'Direct' : `${f.stops} stop${f.stops > 1 ? 's' : ''}`,
+                f.baseFare,
+                f.finalFare,
+                f.fareClass || 'Regular', // This is now "Fare Type Received"
+                fareTypeWeShow,           // This is now "FareTypeWeShow"
+                f.provider,
+                f.baggage || 'N/A',
+                f.cabinBaggage || 'N/A'
+            ];
+        });
+    } else if (portal === 'tripjack') {
+        headers = ['Portal', 'Flight Number', 'Airline', 'Origin', 'Destination', 'Sector',
+            'Date', 'Departure Time', 'Arrival Time', 'Duration', 'Stops',
+            'Base Fare', 'Final Fare', 'Net-TDS', 'Fare Type',
+            'Provider', 'Check-in Baggage', 'Cabin Baggage'];
+        
+        rows = flights.map(f => {
+            // Extract date and times
+            const depDate = f.departureTime ? f.departureTime.split(',')[0] : '';
+            const depTime = f.departureTime ? f.departureTime.split(',')[1]?.trim() || '' : '';
+            const arrTime = f.arrivalTime ? f.arrivalTime.split(',')[1]?.trim() || '' : '';
+            
+            return [
+                f.portal,
+                f.flightNumber, // No quotes, already has underscore separator
+                f.airline,      // No quotes
+                f.origin,
+                f.destination,
+                `${f.origin}-${f.destination}`,
+                depDate,
+                depTime,
+                arrTime,
+                f.duration,
+                f.directIndirect === 'Direct' ? 'Direct' : `${f.stops} stop${f.stops > 1 ? 's' : ''}`,
+                f.baseFare,
+                f.finalFare,
+                (f.netMinusTds || 0).toFixed(2),
+                f.fareType || f.fareClass || '',
+                f.provider,
+                f.baggage || 'N/A',
+                f.cabinBaggage || 'N/A'
+            ];
+        });
+    } else {
+        headers = ['Portal', 'Flight Number', 'Airline', 'Origin', 'Destination', 'Sector',
+            'Date', 'Departure Time', 'Arrival Time', 'Duration', 'Stops',
+            'Base Fare', 'Final Fare', 'Fare Type', 'Provider',
+            'Check-in Baggage', 'Cabin Baggage', 'Cabin Class'];
+        
+        rows = flights.map(f => {
+            // Extract date and times
+            const depDate = f.departureTime ? f.departureTime.split(',')[0] : '';
+            const depTime = f.departureTime ? f.departureTime.split(',')[1]?.trim() || '' : '';
+            const arrTime = f.arrivalTime ? f.arrivalTime.split(',')[1]?.trim() || '' : '';
+            
+            // Fix flight number format - replace commas with underscores
+            const flightNumber = f.flightNumber.replace(/,\s*/g, '_');
+            
+            return [
+                f.portal,
+                flightNumber,   // No quotes, commas replaced with underscores
+                f.airline,      // No quotes
+                f.origin,
+                f.destination,
+                `${f.origin}-${f.destination}`,
+                depDate,
+                depTime,
+                arrTime,        // No quotes
+                f.duration,
+                f.directIndirect === 'Direct' ? 'Direct' : 
+                    (f.stops === 'Non-Stop' || f.stops === 'non-stop' ? 'Direct' : f.stops),
+                f.baseFare,
+                f.finalFare,
+                f.fareType || 'Published',
+                f.provider,
+                f.baggage || '15 Kg',
+                f.cabinBaggage || '7 Kg',
+                f.cabinClass || 'Economy'
+            ];
+        });
+    }
+    
+    return [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+}
+
+function downloadCSV(content, filename) {
+    const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    const url = URL.createObjectURL(blob);
+    
+    link.setAttribute('href', url);
+    link.setAttribute('download', filename);
+    link.style.visibility = 'hidden';
+    
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    
+    URL.revokeObjectURL(url);
+}
+
+async function searchTravclanFlights(source, destination, departureDate) {
+    const bearerToken = document.getElementById('travclanToken').value.trim();
+    if (!bearerToken) return { success: false, error: 'Travclan token missing' };
 
     try {
-        const results = await Promise.all(searchPromises);
-        
-        let resultIndex = 0;
-        let travclanResult = searchTravclan ? results[resultIndex++] : { success: false };
-        let tripjackResult = searchTripjack ? results[resultIndex++] : { success: false };
-        let tboResult = searchTBO ? results[resultIndex++] : { success: false };
+        const result = await fetchTravclanPages({
+            endpoint: 'http://localhost:3001/api/travclan/flights',
+            bearerToken: bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken,
+            source, destination, departureDate
+        });
 
-        // Display results
-        displayResults(travclanResult, tripjackResult, tboResult, searchTravclan, searchTripjack, searchTBO);
-
-        // Enable export buttons if data is available
-        if (travclanFlightData.length > 0) exportTravclanBtn.disabled = false;
-        if (tripjackFlightData.length > 0) exportTripjackBtn.disabled = false;
-        if (tboFlightData.length > 0) exportTBOBtn.disabled = false;
-
+        if (result.success) {
+            const flights = processTravclanData(result.data);
+            return { success: true, flights };
+        }
+        return result;
     } catch (error) {
-        showError(error.message);
-    } finally {
-        loading.classList.remove('active');
+        return { success: false, error: error.message };
     }
 }
 
-// TBO Search Function - Fixed to match exact cURL format
-async function searchTBOFlights(source, destination, departureDate) {
-    console.log('🚀 Starting TBO flight search...');
-    console.log(`  📍 Route: ${source} → ${destination}`);
-    console.log(`  📅 Date: ${departureDate}`);
-    
-    const sessionCookies = document.getElementById('tboCookies').value.trim();
-    if (!sessionCookies) {
-        console.log('❌ TBO session cookies missing');
-        return { success: false, error: 'TBO session cookies missing' };
-    }
+async function searchTripjackFlights(source, destination, departureDate) {
+    const bearerToken = document.getElementById('tripjackToken').value.trim();
+    if (!bearerToken) return { success: false, error: 'Tripjack token missing' };
 
-    const endpoint = 'http://localhost:3001/api/tbo/flights';
-    console.log(`  🔗 Using endpoint: ${endpoint}`);
+    try {
+        const searchBody = {
+            "searchQuery": {
+                "cabinClass": "ECONOMY",
+                "preferredAirline": [],
+                "searchModifiers": {
+                    "pfts": ["REGULAR"],
+                    "isDirectFlight": false,
+                    "isConnectingFlight": false,
+                    "sourceId": 0,
+                    "pnrCreditInfo": { "pnr": "" },
+                    "iiss": false
+                },
+                "routeInfos": [{
+                    "fromCityOrAirport": { "code": source },
+                    "toCityOrAirport": { "code": destination },
+                    "travelDate": departureDate
+                }],
+                "paxInfo": { "ADULT": 1, "CHILD": 0, "INFANT": 0 }
+            },
+            "isNewFlow": false,
+            "apiName": "flightList"
+        };
+
+        const searchResponse = await fetch('http://localhost:3001/api/tripjack/flights', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken
+            },
+            body: JSON.stringify(searchBody)
+        });
+
+        if (!searchResponse.ok) throw new Error(`Tripjack Search Error: ${searchResponse.status}`);
+
+        const searchData = await searchResponse.json();
+        
+        if (searchData?.payload?.searchResult?.tripInfos?.ONWARD) {
+            const flights = processTripjackData(searchData);
+            return { success: true, flights };
+        }
+
+        const requestId = searchData?.requestId || searchData?.payload?.searchQuery?.requestId || 
+                         searchData?.payload?.requestIds?.[0] || searchData?.payload?.requestId;
+        
+        if (!requestId) throw new Error('No requestId found');
+
+        let retryCount = 0;
+        const maxRetries = 15; // Increased from 10
+        let lastValidData = null;
+        let consecutiveEmptyResults = 0;
+        
+        while (retryCount < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Fixed 1 second delay
+            
+            const resultResponse = await fetch('http://localhost:3001/api/tripjack/flights', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken
+                },
+                body: JSON.stringify({ "requestId": requestId, "apiName": "flightResult" })
+            });
+
+            if (!resultResponse.ok) throw new Error(`Tripjack Result Error: ${resultResponse.status}`);
+
+            const resultData = await resultResponse.json();
+            
+            if (resultData?.payload?.searchResult?.tripInfos?.ONWARD) {
+                const currentTrips = resultData.payload.searchResult.tripInfos.ONWARD;
+                
+                // Store valid data
+                if (currentTrips && currentTrips.length > 0) {
+                    lastValidData = resultData;
+                    consecutiveEmptyResults = 0;
+                } else {
+                    consecutiveEmptyResults++;
+                }
+                
+                // Check if search is complete
+                const isSearchComplete = resultData?.payload?.searchCompleted === true || 
+                                       resultData?.payload?.isSearchCompleted === true ||
+                                       resultData?.payload?.status === 'COMPLETED' ||
+                                       !resultData?.payload?.retryInSecond ||
+                                       resultData?.payload?.retryInSecond === 0;
+                
+                if (isSearchComplete || consecutiveEmptyResults >= 3) {
+                    // Use the last valid data we received
+                    if (lastValidData) {
+                        const flights = processTripjackData(lastValidData);
+                        return { success: true, flights };
+                    }
+                    break;
+                }
+            }
+            
+            retryCount++;
+        }
+        
+        // If we have any valid data, return it
+        if (lastValidData) {
+            const flights = processTripjackData(lastValidData);
+            return { success: true, flights };
+        }
+        
+        throw new Error('Failed to get flight results after maximum retries');
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
+async function searchTBOFlights(source, destination, departureDate) {
+    const sessionCookies = document.getElementById('tboCookies').value.trim();
+    if (!sessionCookies) return { success: false, error: 'TBO session cookies missing' };
 
     try {
         const formattedDate = formatDateForTBO(departureDate);
-        console.log(`  📅 Formatted date for TBO: ${formattedDate}`);
-
-        // Get full airport names
         const originFull = airportNames[source] || `${source} Airport (${source}), India`;
         const destinationFull = airportNames[destination] || `${destination} Airport (${destination}), India`;
-
-        // Generate session IDs like TBO does
         const sessionStampId = Date.now().toString() + Math.floor(Math.random() * 1000);
         const sessionStamp = Date.now().toString() + Math.floor(Math.random() * 1000);
 
-        // Prepare form data EXACTLY as TBO expects - already URL encoded
         const formData = {
             'ReturnType': '0',
             'origin': originFull.replace(/\s+/g, '+').replace(/,/g, '%2C').replace(/\(/g, '%28').replace(/\)/g, '%29'),
@@ -229,10 +730,7 @@ async function searchTBOFlights(source, destination, departureDate) {
             'ResultRecommendationType': '2'
         };
 
-        console.log('  📤 Sending TBO search request...');
-        console.log('  📤 Form data:', formData);
-
-        const response = await fetch(endpoint, {
+        const response = await fetch('http://localhost:3001/api/tbo/flights', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -243,637 +741,46 @@ async function searchTBOFlights(source, destination, departureDate) {
             body: JSON.stringify(formData)
         });
 
-        console.log(`  📥 TBO response status: ${response.status}`);
-
         if (!response.ok) {
-            const errorText = await response.text();
-            console.error('❌ TBO search error:', errorText);
-            
-            try {
-                const errorJson = JSON.parse(errorText);
-                if (errorJson.error) {
-                    throw new Error(errorJson.message || errorJson.error);
-                }
-            } catch (e) {
-                // Not JSON, use original error
+            if (response.status === 401) {
+                throw new Error('TBO session expired. Please login and update cookies.');
             }
-            
-            if (response.status === 401 || errorText.includes('login')) {
-                throw new Error('TBO session expired. Please login to TBO and update session cookies.');
-            }
-            
             throw new Error(`TBO Search Error: ${response.status}`);
         }
 
         const htmlContent = await response.text();
-        console.log(`  📥 Response HTML length: ${htmlContent.length} characters`);
-
         if (htmlContent.length < 5000) {
-            throw new Error('Received unexpectedly short response from TBO. Session may have expired.');
+            throw new Error('Session may have expired.');
         }
 
-        // Parse the HTML content
-        const parsedData = await parseTBOFlightData(htmlContent);
-        tboFlightData = parsedData;
-
-        console.log(`✅ TBO API fetched data successfully`);
-        console.log(`  ✈️ Processed ${tboFlightData.length} flight options`);
-
-        return { success: true, flights: tboFlightData };
+        const flights = parseTBOFlightData(htmlContent, departureDate);
+        return { success: true, flights };
 
     } catch (error) {
-        console.error('❌ TBO error:', error);
         return { success: false, error: error.message };
     }
 }
 
-// Parse TBO flight data from HTML - Updated to handle multiple suppliers/fare types
-async function parseTBOFlightData(htmlContent) {
-    console.log('  📊 Parsing TBO flight data...');
-    
-    // Create a temporary container to parse HTML
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = htmlContent;
-    
-    // Use the selector for all flight cards
-    const flightCards = tempDiv.querySelectorAll('.refResultRow');
-    console.log(`  📊 Found ${flightCards.length} flight cards using TBO selector`);
-
-    if (flightCards.length === 0) {
-        // Check for error indicators
-        if (htmlContent.includes('login') || htmlContent.includes('Login')) {
-            throw new Error('Received login page - TBO session cookies may be expired');
-        }
-        if (htmlContent.includes('No flights found') || htmlContent.includes('No results')) {
-            console.log('  ℹ️ No flights found for the selected route/date');
-            return [];
-        }
-        
-        console.log('  ⚠️ No flight cards found');
-        return [];
-    }
-
-    const processedFlights = [];
-    
-    // Extended airline name mapping
-    const airlineNameMap = {
-        '6E': 'Indigo',
-        'SG': 'SpiceJet', 
-        'IX': 'Air India Express',
-        'AI': 'Air India',
-        'UK': 'Vistara',
-        'G8': 'GoAir',
-        'I5': 'AirAsia India',
-        '9W': 'Jet Airways',
-        'QP': 'Akasa Air',
-        'TG': 'Thai Airways International',
-        'OD': 'Malindo Air',
-        'VN': 'Vietnam Airlines',
-        'MH': 'Malaysia Airlines',
-        'VJ': 'VietJet Air',
-        'SQ': 'Singapore Airlines',
-        'CX': 'Cathay Pacific',
-        'EY': 'Etihad Airways',
-        'QR': 'Qatar Airways',
-        'EK': 'Emirates Airlines',
-        'GA': 'Garuda Indonesia'
-    };
-    
-    flightCards.forEach((flightCard, flightIndex) => {
-        try {
-            // Extract base flight information
-            const airlineCode = flightCard.querySelector('.airlinecode code')?.textContent?.trim() || 
-                              flightCard.querySelector('kbd[id^="airlineCode_"]')?.textContent?.trim() || '';
-            
-            // Get all flight numbers
-            const flightNumbers = Array.from(flightCard.querySelectorAll('.airlinecode small'))
-                .map(el => el.textContent.trim())
-                .filter(num => num)
-                .join(', ');
-            
-            // Alternative flight number extraction
-            const altFlightNumber = flightCard.querySelector('input[id^="allSegmentFltNo_"]')?.value || '';
-            const finalFlightNumbers = flightNumbers || altFlightNumber || '';
-            
-            // Get airline name from mapping or use code
-            const airlineName = airlineNameMap[airlineCode] || 
-                              flightCard.querySelector('.fn_rht h4')?.textContent?.trim() || 
-                              airlineCode || 'Unknown';
-            
-            // Extract route information
-            const origin = flightCard.querySelector('[id^="OriginAirportCode_"]')?.textContent?.trim() || 
-                         flightCard.querySelector('span[id^="OriginAirportCode_"]')?.textContent?.trim() || '';
-            
-            const destination = flightCard.querySelector('[id^="DestinationAirportCode_"]')?.textContent?.trim() || 
-                              flightCard.querySelector('span[id^="DestinationAirportCode_"]')?.textContent?.trim() || '';
-            
-            // Times
-            const departureTime = flightCard.querySelector('.fdepbx tt')?.textContent?.trim() || '';
-            const arrivalTime = flightCard.querySelector('.farrbx tt')?.textContent?.trim() || '';
-            const duration = flightCard.querySelector('[id^="duration_"]')?.textContent?.trim() || 
-                           flightCard.querySelector('tt[id^="duration_"]')?.textContent?.trim() || '';
-            
-            // Stops information
-            const stopsElement = flightCard.querySelector('[id^="outBoundStops_"] small') || 
-                               flightCard.querySelector('[id^="outBoundStops_"]');
-            const stopsText = stopsElement?.textContent?.trim()?.toLowerCase() || 'non-stop';
-            const directOrIndirect = stopsText.includes('non-stop') || stopsText === '0' ? 'Direct' : 'Indirect';
-            
-            // Cabin class
-            const cabinClass = flightCard.querySelector('p[id^="pCabinClass_"]')?.textContent?.trim() || 'Economy';
-            
-            // IMPORTANT: Now process EACH price box (multiple suppliers/fare types per flight)
-            const priceBoxes = flightCard.querySelectorAll('.flpricebx');
-            
-            if (priceBoxes.length === 0) {
-                // Fallback to single price extraction
-                const publishFare = flightCard.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
-                const offerFare = flightCard.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
-                const fareType = flightCard.querySelector('span[id^="faretype_"]')?.textContent?.trim() || 'Published';
-                
-                if (parseFloat(offerFare) > 0) {
-                    const formattedFlightNumber = `${airlineCode}-${finalFlightNumbers}`;
-                    
-                    processedFlights.push({
-                        portal: 'TBO',
-                        flightNumber: formattedFlightNumber,
-                        airline: airlineName,
-                        origin: origin,
-                        destination: destination,
-                        departureTime: departureTime,
-                        arrivalTime: arrivalTime,
-                        duration: duration,
-                        stops: stopsText,
-                        directIndirect: directOrIndirect,
-                        baseFare: parseFloat(publishFare) || 0,
-                        finalFare: parseFloat(offerFare) || 0,
-                        netTDS: 0,
-                        fareType: fareType,
-                        provider: 'TBO',
-                        baggage: '15 Kg',
-                        cabinBaggage: '7 Kg',
-                        cabinClass: cabinClass
-                    });
-                }
-            } else {
-                // Process each price box (different suppliers/fare types)
-                priceBoxes.forEach((priceBox, priceIndex) => {
-                    const publishFare = priceBox.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
-                    const offerFare = priceBox.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
-                    const fareType = priceBox.querySelector('span[id^="faretype_"]')?.textContent?.trim() || '';
-                    
-                    // Skip empty price boxes
-                    if (!publishFare && !offerFare && !fareType) return;
-                    
-                    // Format flight number with supplier info
-                    const formattedFlightNumber = `${airlineCode}-${finalFlightNumbers}`;
-                    
-                    // Extract baggage info if available in price box
-                    const baggage = priceBox.querySelector('td[id^="checkInBaggage_"]')?.textContent?.trim() || '15 Kg';
-                    const cabinBaggage = priceBox.querySelector('td[id^="cabinBaggage_"]')?.textContent?.trim() || '7 Kg';
-                    
-                    const flightData = {
-                        portal: 'TBO',
-                        flightNumber: formattedFlightNumber,
-                        airline: airlineName,
-                        origin: origin,
-                        destination: destination,
-                        departureTime: departureTime,
-                        arrivalTime: arrivalTime,
-                        duration: duration,
-                        stops: stopsText,
-                        directIndirect: directOrIndirect,
-                        baseFare: parseFloat(publishFare) || 0,
-                        finalFare: parseFloat(offerFare) || 0,
-                        netTDS: 0,
-                        fareType: fareType || 'Published',
-                        provider: `TBO-${fareType || 'Default'}`, // Include fare type in provider
-                        baggage: baggage,
-                        cabinBaggage: cabinBaggage,
-                        cabinClass: cabinClass
-                    };
-                    
-                    if (parseFloat(offerFare) > 0 && origin && destination) {
-                        processedFlights.push(flightData);
-                        console.log(`  ✈️ Processed TBO flight ${flightIndex + 1}.${priceIndex + 1}: ${airlineName} ${formattedFlightNumber} - ${fareType} - ₹${offerFare}`);
-                    }
-                });
-            }
-        } catch (error) {
-            console.error(`  ❌ Error processing TBO flight card ${flightIndex + 1}: ${error.message}`);
-        }
-    });
-
-    console.log(`  📊 Successfully parsed ${processedFlights.length} TBO flight options (including multiple fare types)`);
-    return processedFlights;
-}
-
-// Alternative parsing for different TBO page structures
-function parseTBOFlightCardsAlternative(cards) {
-    const processedFlights = [];
-    
-    cards.forEach((card, index) => {
-        try {
-            // Try multiple selector patterns
-            const getTextContent = (selectors) => {
-                for (const selector of selectors) {
-                    const element = card.querySelector(selector);
-                    if (element) return element.textContent.trim();
-                }
-                return '';
-            };
-            
-            const getValue = (selectors) => {
-                for (const selector of selectors) {
-                    const element = card.querySelector(selector);
-                    if (element && element.value) return element.value;
-                }
-                return '';
-            };
-
-            // Airline and flight number
-            const airlineCode = getTextContent([
-                'kbd[id^="airlineCode_"]',
-                '.airlinecode',
-                '[class*="airline-code"]'
-            ]);
-            
-            const flightNumber = getValue([
-                'input[id^="allSegmentFltNo_"]',
-                'input[name*="flightNumber"]'
-            ]) || getTextContent([
-                '[class*="flight-number"]',
-                '.flight-number'
-            ]);
-            
-            const flightFullNumber = airlineCode && flightNumber ? 
-                `${airlineCode}-${flightNumber}` : 
-                getTextContent(['.flight-code', '[class*="flight-code"]']) || 'Unknown';
-            
-            const airlineName = getTextContent([
-                '.fn_rht h4',
-                '.flightname .fn_rht .mobile_not',
-                '.airline-name',
-                '[class*="airline-name"]'
-            ]) || 'Unknown';
-
-            // Routes
-            const origin = getTextContent([
-                'span[id^="OriginAirportCode_"]',
-                '#OriginAirportCode_0',
-                '.fdepbx .fs-14',
-                '[class*="origin"]'
-            ]).match(/[A-Z]{3}/)?.[0] || '';
-            
-            const destination = getTextContent([
-                'span[id^="DestinationAirportCode_"]',
-                '#DestinationAirportCode_0',
-                '.farrbx .fs-14',
-                '[class*="destination"]'
-            ]).match(/[A-Z]{3}/)?.[0] || '';
-
-            // Times
-            const departureTime = getTextContent([
-                '.fdepbx tt',
-                '[class*="depart"] time',
-                '[class*="departure-time"]'
-            ]) || '';
-            
-            const arrivalTime = getTextContent([
-                '.farrbx tt',
-                '[class*="arriv"] time',
-                '[class*="arrival-time"]'
-            ]) || '';
-
-            // Duration and stops
-            const duration = getTextContent([
-                'tt[id^="duration_"]',
-                '#duration_0',
-                '.dur_time tt',
-                '[class*="duration"]'
-            ]) || '';
-            
-            const stopsText = getTextContent([
-                'span[id^="outBoundStops_"]',
-                '#outBoundStops_0',
-                '[class*="stops"]'
-            ]);
-            const stops = stopsText || 'Non-Stop';
-            const isDirect = stops === 'Non-Stop' || stops === '' ? 'Direct' : 'Indirect';
-
-            // Prices
-            const fareSummary = getValue([
-                'input[id^="FareSummaryValue_"]',
-                'input[name*="fareSummary"]'
-            ]);
-            const baseFare = fareSummary ? parseFloat(fareSummary.split('|')[0]) || 0 : 0;
-            
-            const finalFareText = getTextContent([
-                'tt[id^="OfferPrice_"]',
-                '#OfferPrice_0',
-                '[class*="offer-price"]',
-                '[class*="final-fare"]'
-            ]);
-            const finalFare = finalFareText ? parseFloat(finalFareText.replace(/[₹,]/g, '')) || 0 : baseFare;
-
-            // Fare type
-            const fareType = getTextContent([
-                'span[id^="faretype_"]',
-                '#faretype_0',
-                '[class*="fare-type"]'
-            ]) || 'Published';
-
-            // Baggage
-            const baggage = getTextContent([
-                'td[id^="checkInBaggage_"]',
-                '#checkInBaggage_0_1',
-                '[class*="baggage"]'
-            ]) || 'Not specified';
-            
-            const cabinBaggage = getTextContent([
-                'td[id^="cabinBaggage_"]',
-                '#cabinBaggage_0_1',
-                '[class*="cabin-baggage"]'
-            ]) || 'Included';
-
-            const flightData = {
-                portal: 'TBO',
-                flightNumber: flightFullNumber,
-                airline: airlineName,
-                origin: origin,
-                destination: destination,
-                departureTime: departureTime,
-                arrivalTime: arrivalTime,
-                duration: duration,
-                stops: stops,
-                directIndirect: isDirect,
-                baseFare: baseFare,
-                finalFare: finalFare,
-                netTDS: 0,
-                fareType: fareType,
-                provider: 'TBO',
-                baggage: baggage,
-                cabinBaggage: cabinBaggage
-            };
-
-            if (flightFullNumber !== 'Unknown' && origin && destination && finalFare > 0) {
-                processedFlights.push(flightData);
-                console.log(`  ✈️ Processed TBO flight ${index + 1}: ${airlineName} ${flightFullNumber}`);
-            }
-        } catch (error) {
-            console.error(`  ❌ Error processing flight card ${index + 1}: ${error.message}`);
-        }
-    });
-    
-    return processedFlights;
-}
-
-// Travclan search function
-async function searchTravclanFlights(source, destination, departureDate) {
-    console.log('🚀 Starting Travclan flight search...');
-    console.log(`  📍 Route: ${source} → ${destination}`);
-    console.log(`  📅 Date: ${departureDate}`);
-    
-    const bearerToken = document.getElementById('travclanToken').value.trim();
-    if (!bearerToken) {
-        console.log('❌ Travclan token missing');
-        return { success: false, error: 'Travclan token missing' };
-    }
-
-    const endpoint = 'http://localhost:3001/api/travclan/flights';
-    console.log(`  🔗 Using endpoint: ${endpoint}`);
-
-    try {
-        const result = await fetchTravclanPages({
-            endpoint: endpoint,
-            bearerToken: bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken,
-            source: source,
-            destination: destination,
-            departureDate: departureDate
-        });
-
-        if (result.success) {
-            console.log(`✅ Travclan API fetched data successfully`);
-            console.log(`  📊 Total results: ${result.data.response?.results?.length || 0}`);
-            console.log(`  📄 Total pages: ${result.data.totalPages || 1}`);
-            
-            travclanFlightData = processTravclanData(result.data);
-            console.log(`  ✈️ Processed ${travclanFlightData.length} flight options`);
-            
-            return { success: true, data: result.data, flights: travclanFlightData };
-        } else {
-            console.log(`❌ Travclan API failed: ${result.error}`);
-            return { success: false, error: result.error };
-        }
-    } catch (error) {
-        console.error('❌ Travclan error:', error);
-        return { success: false, error: error.message };
-    }
-}
-
-// Tripjack search function
-async function searchTripjackFlights(source, destination, departureDate) {
-    console.log('🚀 Starting Tripjack flight search...');
-    console.log(`  📍 Route: ${source} → ${destination}`);
-    console.log(`  📅 Date: ${departureDate}`);
-    
-    const bearerToken = document.getElementById('tripjackToken').value.trim();
-    if (!bearerToken) {
-        console.log('❌ Tripjack token missing');
-        return { success: false, error: 'Tripjack token missing' };
-    }
-
-    const endpoint = 'http://localhost:3001/api/tripjack/flights';
-    console.log(`  🔗 Using endpoint: ${endpoint}`);
-
-    try {
-        // Step 1: Search for flights using flightList API
-        console.log('  📤 Step 1: Initiating flight search with flightList API...');
-        
-        const searchBody = {
-            "searchQuery": {
-                "cabinClass": "ECONOMY",
-                "preferredAirline": [],
-                "searchModifiers": {
-                    "pfts": ["REGULAR"],
-                    "isDirectFlight": false,
-                    "isConnectingFlight": false,
-                    "sourceId": 0,
-                    "pnrCreditInfo": {
-                        "pnr": ""
-                    },
-                    "iiss": false
-                },
-                "routeInfos": [{
-                    "fromCityOrAirport": {
-                        "code": source
-                    },
-                    "toCityOrAirport": {
-                        "code": destination
-                    },
-                    "travelDate": departureDate
-                }],
-                "paxInfo": {
-                    "ADULT": 1,
-                    "CHILD": 0,
-                    "INFANT": 0
-                }
-            },
-            "isNewFlow": false,
-            "apiName": "flightList"
-        };
-
-        const searchResponse = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken
-            },
-            body: JSON.stringify(searchBody)
-        });
-
-        console.log(`  📥 Search response status: ${searchResponse.status}`);
-
-        if (!searchResponse.ok) {
-            const errorText = await searchResponse.text();
-            console.error('❌ Tripjack search error:', errorText);
-            throw new Error(`Tripjack Search Error: ${searchResponse.status}`);
-        }
-
-        const searchData = await searchResponse.json();
-        console.log('  📥 Search response received');
-
-        // Check if we got direct results or need to fetch with requestId
-        if (searchData?.payload?.searchResult?.tripInfos?.ONWARD) {
-            console.log('✅ Direct flight results received in flightList response');
-            tripjackFlightData = processTripjackData(searchData);
-            console.log(`  ✈️ Total processed Tripjack flights: ${tripjackFlightData.length}`);
-            return { success: true, data: searchData, flights: tripjackFlightData };
-        }
-
-        // Extract requestId
-        const requestId = searchData?.requestId || 
-                         searchData?.payload?.searchQuery?.requestId || 
-                         searchData?.payload?.requestIds?.[0] ||
-                         searchData?.payload?.requestId;
-        
-        if (!requestId) {
-            console.error('❌ No requestId found in search response');
-            throw new Error('No requestId found in search response');
-        }
-
-        console.log(`  ✅ Got requestId: ${requestId}`);
-
-        // Step 2: Fetch flight results using requestId with retry mechanism
-        console.log('  📤 Step 2: Fetching flight results with requestId...');
-        
-        let retryCount = 0;
-        const maxRetries = 10;
-        let resultData = null;
-        
-        while (retryCount < maxRetries) {
-            const resultBody = {
-                "requestId": requestId,
-                "apiName": "flightResult"
-            };
-
-            const resultResponse = await fetch(endpoint, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': bearerToken.startsWith('Bearer ') ? bearerToken : 'Bearer ' + bearerToken
-                },
-                body: JSON.stringify(resultBody)
-            });
-
-            console.log(`  📥 Result response status: ${resultResponse.status}`);
-
-            if (!resultResponse.ok) {
-                const errorText = await resultResponse.text();
-                console.error('❌ Tripjack result error:', errorText);
-                throw new Error(`Tripjack Result Error: ${resultResponse.status}`);
-            }
-
-            resultData = await resultResponse.json();
-            
-            // Check if we have flight results
-            if (resultData?.payload?.searchResult?.tripInfos?.ONWARD) {
-                console.log('✅ Flight results received!');
-                break;
-            }
-            
-            // Check if we need to retry
-            const retryInSeconds = resultData?.payload?.retryInSecond || 0;
-            if (retryInSeconds > 0 && retryCount < maxRetries - 1) {
-                console.log(`  ⏳ Results not ready yet. Waiting ${retryInSeconds} seconds before retry...`);
-                await new Promise(resolve => setTimeout(resolve, retryInSeconds * 1000));
-                retryCount++;
-            } else {
-                break;
-            }
-        }
-        
-        if (!resultData || !resultData?.payload?.searchResult?.tripInfos?.ONWARD) {
-            throw new Error('Failed to get flight results after maximum retries');
-        }
-
-        console.log('✅ Tripjack API fetched results successfully');
-        
-        tripjackFlightData = processTripjackData(resultData);
-        console.log(`  ✈️ Total processed Tripjack flights: ${tripjackFlightData.length}`);
-        
-        return { success: true, data: resultData, flights: tripjackFlightData };
-
-    } catch (error) {
-        console.error('❌ Tripjack error:', error);
-        console.error('Error stack:', error.stack);
-        return { success: false, error: error.message };
-    }
-}
-
-// Fetch Travclan pages
 async function fetchTravclanPages(config) {
-    console.log('  📄 Fetching Travclan pages...');
-    
     try {
-        // Fetch page 1 first
-        console.log('    ↳ Fetching page 1...');
         const page1Response = await fetchTravclanPage(config, 1);
-        if (!page1Response.ok) {
-            throw new Error(`Travclan API Error: ${page1Response.status}`);
-        }
+        if (!page1Response.ok) throw new Error(`Travclan API Error: ${page1Response.status}`);
 
         const page1Data = await page1Response.json();
         let allResults = page1Data.response?.results || [];
         const totalPages = page1Data.totalPages || 1;
-        
-        console.log(`    ✅ Page 1 loaded: ${allResults.length} results`);
-        console.log(`    📄 Total pages to fetch: ${totalPages}`);
 
         if (totalPages === 1) {
             return { success: true, data: { response: { results: allResults }, totalPages } };
         }
 
-        // Fetch remaining pages in parallel
-        console.log(`    ↳ Fetching remaining ${totalPages - 1} pages in parallel...`);
         const promises = [];
         for (let page = 2; page <= totalPages; page++) {
             promises.push(
                 fetchTravclanPage(config, page)
-                    .then(res => {
-                        if (res.ok) {
-                            console.log(`      ✅ Page ${page} loaded`);
-                            return res.json();
-                        } else {
-                            console.log(`      ❌ Page ${page} failed with status ${res.status}`);
-                            return Promise.reject(`Page ${page} failed`);
-                        }
-                    })
+                    .then(res => res.ok ? res.json() : Promise.reject())
                     .then(data => data.response?.results || [])
-                    .catch((err) => {
-                        console.log(`      ⚠️ Error on page ${page}: ${err}`);
-                        return [];
-                    })
+                    .catch(() => [])
             );
         }
 
@@ -881,27 +788,14 @@ async function fetchTravclanPages(config) {
         for (const results of otherResults) {
             allResults = allResults.concat(results);
         }
-        
-        console.log(`    ✅ All pages loaded. Total results: ${allResults.length}`);
 
-        return {
-            success: true,
-            data: {
-                response: { results: allResults },
-                totalPages
-            }
-        };
-
+        return { success: true, data: { response: { results: allResults }, totalPages } };
     } catch (error) {
-        console.error(`    ❌ Error fetching Travclan pages: ${error.message}`);
         return { success: false, error: error.message };
     }
 }
 
-// Fetch single Travclan page
 function fetchTravclanPage(config, page) {
-    const formattedDate = config.departureDate + 'T00:00:00';
-    
     return fetch(config.endpoint, {
         method: 'POST',
         headers: {
@@ -915,7 +809,7 @@ function fetchTravclanPage(config, page) {
             infantCount: "0",
             flightCabinClass: "1",
             journeyType: 1,
-            preferredDepartureTime: formattedDate,
+            preferredDepartureTime: config.departureDate + 'T00:00:00',
             origin: config.source,
             destination: config.destination,
             memberCode: "jky5",
@@ -928,7 +822,6 @@ function fetchTravclanPage(config, page) {
     });
 }
 
-// Process Travclan data
 function processTravclanData(data) {
     const processedFlights = [];
     if (!data?.response?.results) return processedFlights;
@@ -965,25 +858,16 @@ function processTravclanData(data) {
     return processedFlights;
 }
 
-// Process Tripjack data
 function processTripjackData(data) {
-    console.log('🔄 Processing Tripjack data...');
     const processedFlights = [];
     
-    if (!data?.payload?.searchResult?.tripInfos?.ONWARD) {
-        console.log('❌ No ONWARD trips found in Tripjack response');
-        return processedFlights;
-    }
+    if (!data?.payload?.searchResult?.tripInfos?.ONWARD) return processedFlights;
 
     const trips = data.payload.searchResult.tripInfos.ONWARD;
-    console.log(`📊 Found ${trips.length} trips in Tripjack response`);
 
-    trips.forEach((trip, tripIndex) => {
+    trips.forEach(trip => {
         const tripInfo = trip.processedTripInfo;
-        if (!tripInfo) {
-            console.log(`    ⚠️ Trip ${tripIndex + 1} has no processedTripInfo`);
-            return;
-        }
+        if (!tripInfo) return;
 
         const airline = tripInfo.aI?.name || '';
         const airlineCode = tripInfo.aI?.code || '';
@@ -997,18 +881,16 @@ function processTripjackData(data) {
         const providers = tripInfo.sups || [];
 
         if (trip.totalPriceList && Array.isArray(trip.totalPriceList)) {
-            trip.totalPriceList.forEach((priceOption, priceIndex) => {
+            trip.totalPriceList.forEach(priceOption => {
                 const adultFare = priceOption.fd?.ADULT;
-                if (!adultFare) {
-                    return;
-                }
+                if (!adultFare) return;
 
                 const matchingPriceInfo = tripInfo.pI?.find(p => p.id === priceOption.id);
 
-                const flightData = {
+                processedFlights.push({
                     portal: 'Tripjack',
                     airline: airline,
-                    flightNumber: flightNumbers.join(', '),
+                    flightNumber: flightNumbers.join('_'),  // Changed from ', ' to '_'
                     origin: origin,
                     destination: destination,
                     departureTime: formatDateTime(departureTime),
@@ -1019,253 +901,138 @@ function processTripjackData(data) {
                     baseFare: adultFare.fC?.BF || 0,
                     finalFare: adultFare.fC?.TF || 0,
                     netMinusTds: matchingPriceInfo?.net || 0,
+                    netFare: adultFare.fC?.NF || 0,  // Added net fare
                     tds: matchingPriceInfo?.tds || 0,
                     fareClass: priceOption.fareIdentifier || matchingPriceInfo?.ft || '',
                     fareType: matchingPriceInfo?.ft || '',
                     provider: providers.join(', '),
                     baggage: adultFare.bI?.iB || 'N/A',
                     cabinBaggage: adultFare.bI?.cB || 'N/A'
-                };
-
-                processedFlights.push(flightData);
+                });
             });
         }
     });
 
-    console.log(`✅ Successfully processed ${processedFlights.length} Tripjack flights`);
     return processedFlights;
 }
 
-// Display results
-function displayResults(travclanResult, tripjackResult, tboResult, showTravclan, showTripjack, showTBO) {
-    const allFlights = [];
+function parseTBOFlightData(htmlContent, departureDate) {
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = htmlContent;
     
-    if (showTravclan && travclanResult.flights) {
-        allFlights.push(...travclanResult.flights);
-    }
+    const flightCards = tempDiv.querySelectorAll('.refResultRow');
+    if (flightCards.length === 0) return [];
+
+    const processedFlights = [];
     
-    if (showTripjack && tripjackResult.flights) {
-        allFlights.push(...tripjackResult.flights);
-    }
-
-    if (showTBO && tboResult.flights) {
-        allFlights.push(...tboResult.flights);
-    }
-
-    // Sort by price
-    allFlights.sort((a, b) => (a.finalFare || a.farePrice) - (b.finalFare || b.farePrice));
-
-    // Display stats
-    const travclanCount = travclanResult.flights?.length || 0;
-    const tripjackCount = tripjackResult.flights?.length || 0;
-    const tboCount = tboResult.flights?.length || 0;
-    const lowestFare = allFlights.length > 0 ? 
-        Math.min(...allFlights.map(f => f.finalFare || f.farePrice)) : 0;
-
-    statsGrid.innerHTML = `
-        <div class="stat-card">
-            <div class="stat-value">${allFlights.length}</div>
-            <div class="stat-label">Total Flights</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">${travclanCount}</div>
-            <div class="stat-label">Travclan Flights</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">${tripjackCount}</div>
-            <div class="stat-label">Tripjack Flights</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">${tboCount}</div>
-            <div class="stat-label">TBO Flights</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-value">₹${lowestFare.toLocaleString()}</div>
-            <div class="stat-label">Lowest Fare</div>
-        </div>
-    `;
-
-    // Display flights (limit to 50)
-    flightGrid.innerHTML = allFlights.slice(0, 50).map(flight => {
-        return `
-            <div class="flight-card">
-                <div class="flight-header">
-                    <div class="airline-info">
-                        <div class="airline-logo">${flight.airline.substring(0, 2).toUpperCase()}</div>
-                        <div>
-                            <div class="flight-number">${flight.flightNumber}</div>
-                            <div class="airline-name">${flight.airline}</div>
-                        </div>
-                    </div>
-                    <div class="price-info">
-                        <div class="final-fare">₹${(flight.finalFare || flight.farePrice).toLocaleString()}</div>
-                        <div class="fare-type">${flight.fareClass || flight.fareType} - ${flight.portal}</div>
-                    </div>
-                </div>
+    flightCards.forEach(flightCard => {
+        try {
+            const airlineCode = flightCard.querySelector('.airlinecode code')?.textContent?.trim() || 
+                              flightCard.querySelector('kbd[id^="airlineCode_"]')?.textContent?.trim() || '';
+            
+            const flightNumbers = Array.from(flightCard.querySelectorAll('.airlinecode small'))
+                .map(el => el.textContent.trim())
+                .filter(num => num)
+                .join('_'); // Changed from ', ' to '_' for CSV compatibility
+            
+            const altFlightNumber = flightCard.querySelector('input[id^="allSegmentFltNo_"]')?.value || '';
+            const finalFlightNumbers = flightNumbers || altFlightNumber || '';
+            
+            const airlineName = airlineNameMap[airlineCode] || 
+                              flightCard.querySelector('.fn_rht h4')?.textContent?.trim() || 
+                              airlineCode || 'Unknown';
+            
+            const origin = flightCard.querySelector('[id^="OriginAirportCode_"]')?.textContent?.trim() || '';
+            const destination = flightCard.querySelector('[id^="DestinationAirportCode_"]')?.textContent?.trim() || '';
+            const departureTime = flightCard.querySelector('.fdepbx tt')?.textContent?.trim() || '';
+            const arrivalTime = flightCard.querySelector('.farrbx tt')?.textContent?.trim() || '';
+            const duration = flightCard.querySelector('[id^="duration_"]')?.textContent?.trim() || '';
+            
+            // Format departure and arrival times with date in MM/DD/YYYY format
+            const formattedDepartureTime = departureTime ? 
+                `${formatDateTimeForCSV(departureDate)}, ${departureTime}` : '';
+            const formattedArrivalTime = arrivalTime ? 
+                `${formatDateTimeForCSV(departureDate)}, ${arrivalTime}` : '';
+            
+            const stopsElement = flightCard.querySelector('[id^="outBoundStops_"] small') || 
+                               flightCard.querySelector('[id^="outBoundStops_"]');
+            const stopsText = stopsElement?.textContent?.trim()?.toLowerCase() || 'non-stop';
+            const directOrIndirect = stopsText.includes('non-stop') || stopsText === '0' ? 'Direct' : 'Indirect';
+            
+            const cabinClass = flightCard.querySelector('p[id^="pCabinClass_"]')?.textContent?.trim() || 'Economy';
+            
+            const priceBoxes = flightCard.querySelectorAll('.flpricebx');
+            
+            if (priceBoxes.length === 0) {
+                const publishFare = flightCard.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
+                const offerFare = flightCard.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '0';
+                const fareType = flightCard.querySelector('span[id^="faretype_"]')?.textContent?.trim() || 'Published';
                 
-                <div class="flight-details">
-                    <div class="departure">
-                        <div class="city-code">${flight.origin}</div>
-                        <div class="time">${flight.departureTime}</div>
-                    </div>
-                    <div class="flight-path">
-                        <div class="flight-line"></div>
-                        <div>
-                            <div class="flight-duration">${flight.duration}</div>
-                            <div class="stops ${flight.stops === 0 || flight.directIndirect === 'Direct' ? 'non-stop' : ''}">
-                                ${flight.directIndirect || (flight.stops === 0 ? 'Direct' : `${flight.stops} stop${flight.stops > 1 ? 's' : ''}`)}
-                            </div>
-                        </div>
-                        <div class="flight-line"></div>
-                    </div>
-                    <div class="arrival">
-                        <div class="city-code">${flight.destination}</div>
-                        <div class="time">${flight.arrivalTime}</div>
-                    </div>
-                </div>
-                
-                <div class="flight-footer">
-                    <div class="baggage-info">
-                        <span>🎒 Cabin: ${flight.cabinBaggage}</span>
-                        <span>🧳 Check-in: ${flight.baggage}</span>
-                    </div>
-                    <div class="provider">${flight.provider}</div>
-                </div>
-            </div>
-        `;
-    }).join('');
+                if (parseFloat(offerFare) > 0) {
+                    processedFlights.push({
+                        portal: 'TBO',
+                        flightNumber: `${airlineCode}-${finalFlightNumbers}`,
+                        airline: airlineName,
+                        origin: origin,
+                        destination: destination,
+                        departureTime: formattedDepartureTime,
+                        arrivalTime: formattedArrivalTime,
+                        duration: duration,
+                        stops: stopsText,
+                        directIndirect: directOrIndirect,
+                        baseFare: parseFloat(publishFare) || 0,
+                        finalFare: parseFloat(offerFare) || 0,
+                        netTDS: 0,
+                        fareType: fareType,
+                        provider: 'TBO',
+                        baggage: '15 Kg',
+                        cabinBaggage: '7 Kg',
+                        cabinClass: cabinClass
+                    });
+                }
+            } else {
+                priceBoxes.forEach(priceBox => {
+                    const publishFare = priceBox.querySelector('tt[id^="PubPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
+                    const offerFare = priceBox.querySelector('tt[id^="OfferPrice_"]')?.textContent?.trim()?.replace(/[₹\s,]/g, '') || '';
+                    const fareType = priceBox.querySelector('span[id^="faretype_"]')?.textContent?.trim() || '';
+                    
+                    if (!publishFare && !offerFare && !fareType) return;
+                    
+                    const baggage = priceBox.querySelector('td[id^="checkInBaggage_"]')?.textContent?.trim() || '15 Kg';
+                    const cabinBaggage = priceBox.querySelector('td[id^="cabinBaggage_"]')?.textContent?.trim() || '7 Kg';
+                    
+                    if (parseFloat(offerFare) > 0 && origin && destination) {
+                        processedFlights.push({
+                            portal: 'TBO',
+                            flightNumber: `${airlineCode}-${finalFlightNumbers}`,
+                            airline: airlineName,
+                            origin: origin,
+                            destination: destination,
+                            departureTime: formattedDepartureTime,
+                            arrivalTime: formattedArrivalTime,
+                            duration: duration,
+                            stops: stopsText,
+                            directIndirect: directOrIndirect,
+                            baseFare: parseFloat(publishFare) || 0,
+                            finalFare: parseFloat(offerFare) || 0,
+                            netTDS: 0,
+                            fareType: fareType || 'Published',
+                            provider: `TBO-${fareType || 'Default'}`,
+                            baggage: baggage,
+                            cabinBaggage: cabinBaggage,
+                            cabinClass: cabinClass
+                        });
+                    }
+                });
+            }
+        } catch (error) {
+            console.error('Error processing TBO flight card:', error);
+        }
+    });
 
-    resultsSection.classList.add('active');
+    return processedFlights;
 }
 
-// Export to CSV
-function exportToCSV(portal) {
-    const flightData = portal === 'travclan' ? travclanFlightData : 
-                     portal === 'tripjack' ? tripjackFlightData : 
-                     tboFlightData;
-    
-    if (!flightData || flightData.length === 0) {
-        showError(`No ${portal} data to export!`);
-        return;
-    }
-
-    console.log(`📥 Exporting ${portal} CSV with ${flightData.length} flights...`);
-
-    let headers, csvContent;
-    
-    if (portal === 'travclan') {
-        headers = [
-            'Portal', 'Flight Number', 'Airline', 'Origin', 'Destination',
-            'Departure Time', 'Arrival Time', 'Duration', 'Stops',
-            'Base Fare', 'Final Fare', 'Fare Class', 'Fare Type',
-            'Provider', 'Baggage', 'Cabin Baggage'
-        ];
-
-        csvContent = [
-            headers.join(','),
-            ...flightData.map(flight => [
-                flight.portal,
-                flight.flightNumber,
-                `"${flight.airline}"`,
-                flight.origin,
-                flight.destination,
-                `"${flight.departureTime}"`,
-                `"${flight.arrivalTime}"`,
-                flight.duration,
-                flight.stops === 0 ? 'Direct' : `${flight.stops} stop${flight.stops > 1 ? 's' : ''}`,
-                flight.baseFare,
-                flight.finalFare,
-                `"${flight.fareClass}"`,
-                `"${flight.fareIdentifier}"`,
-                `"${flight.provider}"`,
-                `"${flight.baggage}"`,
-                `"${flight.cabinBaggage}"`
-            ].join(','))
-        ].join('\n');
-    } else if (portal === 'tripjack') {
-        headers = [
-            'Portal', 'Flight Number', 'Airline', 'Origin', 'Destination',
-            'Departure Time', 'Arrival Time', 'Duration', 'Direct/Indirect',
-            'Base Fare', 'Final Fare', 'Net-TDS', 'Fare Type',
-            'Provider', 'Baggage', 'Cabin Baggage'
-        ];
-
-        csvContent = [
-            headers.join(','),
-            ...flightData.map(flight => [
-                flight.portal,
-                `"${flight.flightNumber}"`,
-                `"${flight.airline}"`,
-                flight.origin,
-                flight.destination,
-                `"${flight.departureTime}"`,
-                `"${flight.arrivalTime}"`,
-                flight.duration,
-                flight.directIndirect,
-                flight.baseFare,
-                flight.finalFare,
-                flight.netMinusTds.toFixed(2),
-                `"${flight.fareType}"`,
-                `"${flight.provider}"`,
-                `"${flight.baggage}"`,
-                `"${flight.cabinBaggage}"`
-            ].join(','))
-        ].join('\n');
-    } else {
-        // TBO CSV format - Updated to handle multiple suppliers
-        headers = [
-            'Portal', 'Flight Number', 'Airline', 'Origin', 'Destination',
-            'Departure Time', 'Arrival Time', 'Duration', 'Direct/Indirect',
-            'Base Fare', 'Final Fare', 'Fare Type', 'Provider',
-            'Baggage', 'Cabin Baggage', 'Cabin Class'
-        ];
-
-        csvContent = [
-            headers.join(','),
-            ...flightData.map(flight => [
-                flight.portal,
-                `"${flight.flightNumber}"`,
-                `"${flight.airline}"`,
-                flight.origin,
-                flight.destination,
-                `"${flight.departureTime}"`,
-                `"${flight.arrivalTime}"`,
-                flight.duration,
-                flight.directIndirect || (flight.stops === 0 || flight.stops === 'Non-Stop' ? 'Direct' : 'Indirect'),
-                flight.baseFare,
-                flight.finalFare,
-                `"${flight.fareType}"`,
-                `"${flight.provider}"`,
-                `"${flight.baggage}"`,
-                `"${flight.cabinBaggage}"`,
-                `"${flight.cabinClass || 'Economy'}"`
-            ].join(','))
-        ].join('\n');
-    }
-
-    const timestamp = new Date().toISOString().split('T')[0];
-    const source = document.getElementById('source').value.toUpperCase();
-    const destination = document.getElementById('destination').value.toUpperCase();
-    const filename = `${portal}_flights_${source}_${destination}_${timestamp}.csv`;
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement('a');
-    const url = URL.createObjectURL(blob);
-    
-    link.setAttribute('href', url);
-    link.setAttribute('download', filename);
-    link.style.visibility = 'hidden';
-    
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    
-    URL.revokeObjectURL(url);
-    
-    console.log(`✅ CSV exported successfully: ${filename}`);
-}
-
-// Helper functions
 function getTravclanProviderName(pr, db) {
     const providerMap = {
         'P1D1': 'TC_TBO_API',
@@ -1297,17 +1064,17 @@ function formatDateTime(dateTimeStr) {
     }
 }
 
-function formatDate(dateTimeStr) {
-    if (!dateTimeStr) return '';
+function formatDate(dateStr) {
+    if (!dateStr) return '';
     try {
-        const date = new Date(dateTimeStr);
+        const date = new Date(dateStr);
         return date.toLocaleDateString('en-US', {
             year: 'numeric',
-            month: '2-digit',
+            month: 'short',
             day: '2-digit'
         });
     } catch (e) {
-        return dateTimeStr;
+        return dateStr;
     }
 }
 
@@ -1344,10 +1111,37 @@ function generateTraceId() {
     });
 }
 
+function formatDateTimeForCSV(dateStr) {
+    if (!dateStr) return '';
+    try {
+        const date = new Date(dateStr);
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        const year = date.getFullYear();
+        return `${month}/${day}/${year}`;
+    } catch (e) {
+        return dateStr;
+    }
+}
+
 function showError(message) {
+    const errorMessage = document.getElementById('errorMessage');
     errorMessage.textContent = message;
     errorMessage.classList.add('active');
     setTimeout(() => {
         errorMessage.classList.remove('active');
     }, 5000);
+}
+
+function showSuccess(message) {
+    const errorMessage = document.getElementById('errorMessage');
+    errorMessage.textContent = message;
+    errorMessage.style.background = '#d4edda';
+    errorMessage.style.color = '#155724';
+    errorMessage.classList.add('active');
+    setTimeout(() => {
+        errorMessage.classList.remove('active');
+        errorMessage.style.background = '';
+        errorMessage.style.color = '';
+    }, 3000);
 }
